@@ -139,12 +139,6 @@ async def all_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply_markup = InlineKeyboardMarkup(buttons)
         await update.message.reply_text("Available quizzes:", reply_markup=reply_markup)
         
-async def quit_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Stops the quiz and resets the user's progress."""
-    context.user_data.clear()  # Reset user progress
-    await update.message.reply_text("You have quit the quiz. Type /start to play again.")
-    return ConversationHandler.END
-
 
 # ---------------------------
 # Quiz Taking Conversation Handlers
@@ -270,6 +264,22 @@ async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text("Quiz cancelled.")
     return ConversationHandler.END
 
+async def quit_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Stops the quiz and resets the user's progress."""
+    context.user_data.clear()  # Reset user progress
+
+    # If the user sent "/quit" as a message
+    if update.message:
+        await update.message.reply_text("❌ You have quit the quiz. Type /start to play again.")
+    else:  
+        # If the user pressed an inline button (just in case)
+        query = update.callback_query
+        await query.answer()
+        await query.message.reply_text("❌ You have quit the quiz. Type /start to play again.")
+
+    return ConversationHandler.END  # Properly exit the conversation
+
+
 # ---------------------------
 # Main Function
 # ---------------------------
@@ -291,10 +301,11 @@ def main() -> None:
         entry_points=[CallbackQueryHandler(start_quiz_conversation, pattern=r"^takequiz_\d+$")],
         states={
             QUIZ_TAKING: [
-                CallbackQueryHandler(quiz_answer_handler, pattern=r"^(answer_\d+|restart_quiz)$")
+                CallbackQueryHandler(quiz_answer_handler, pattern=r"^(answer_\d+|restart_quiz)$"),
+                CommandHandler("quit", quit_quiz),
             ]
         },
-        fallbacks=[CommandHandler("cancel", cancel_quiz)],
+        fallbacks=[CommandHandler("cancel", cancel_quiz), CommandHandler("quit", quit_quiz)],
     )
     application.add_handler(conv_handler)
 
