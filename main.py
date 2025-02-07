@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -27,10 +28,12 @@ logger = logging.getLogger(__name__)
 #   quiz_id (int) : {"name": <quiz name>, "creator_id": <user id>, "questions": [list of questions]}
 # A question is expected to be a dict with keys: "question", "options", "correct_option"
 quizzes = {}
+leaderboard = {}  # Stores user scores {user_id: {"name": "John", "score": 5, "total": 10}}
 next_quiz_id = 1  # Auto-increment quiz id
 
 # Conversation state for taking a quiz
 QUIZ_TAKING = 1
+QUESTION_TIMEOUT = 20  # Time limit for answering a question (in seconds)
 
 API_TOKEN = os.getenv('BOT_API_KEY')
 TELEGRAM_API_URL = f'https://api.telegram.org/bot{API_TOKEN}'
@@ -120,6 +123,13 @@ async def all_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             buttons.append([button])
         reply_markup = InlineKeyboardMarkup(buttons)
         await update.message.reply_text("Available quizzes:", reply_markup=reply_markup)
+        
+async def quit_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Stops the quiz and resets the user's progress."""
+    context.user_data.clear()  # Reset user progress
+    await update.message.reply_text("You have quit the quiz. Type /start to play again.")
+    return ConversationHandler.END
+
 
 # ---------------------------
 # Quiz Taking Conversation Handlers
@@ -153,30 +163,52 @@ async def start_quiz_conversation(update: Update, context: ContextTypes.DEFAULT_
     return QUIZ_TAKING
 
 async def send_next_quiz_question(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send the next question from the current quiz or finish if done."""
+    """Send the next question or finish the quiz."""
     quiz = context.user_data.get("current_quiz")
     current_q = context.user_data.get("current_q", 0)
 
     if current_q < len(quiz["questions"]):
         q = quiz["questions"][current_q]
-        # Build an inline keyboard for the options.
         keyboard = [
             [InlineKeyboardButton(option, callback_data=f"answer_{idx}")]
             for idx, option in enumerate(q["options"])
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text(q["question"], reply_markup=reply_markup)
+
+        # Start question timer
+        await asyncio.sleep(QUESTION_TIMEOUT)
+        if context.user_data.get("current_q") == current_q:  # Check if user answered
+            context.user_data["current_q"] += 1  # Move to next question
+            await query.message.reply_text("⏳ Time's up! Moving to the next question.")
+            await send_next_quiz_question(query, context)
+
     else:
-        # Quiz finished; show final score and offer to restart.
+        # 🎯 Quiz finished: Update leaderboard
+        user_id = query.from_user.id
+        user_name = query.from_user.first_name
         score = context.user_data.get("score", 0)
         total = len(quiz["questions"])
-        text = f"Quiz Completed!\nYour score: {score}/{total}\nWould you like to restart the quiz?"
+
+        leaderboard[user_id] = {"name": user_name, "score": score, "total": total}
+
+        # 🏆 Generate leaderboard ranking
+        sorted_leaderboard = sorted(
+            leaderboard.items(), key=lambda x: x[1]["score"], reverse=True
+        )
+        ranking_text = "🏅 *Leaderboard:*\n"
+        for idx, (uid, data) in enumerate(sorted_leaderboard[:5], start=1):  # Show top 5
+            ranking_text += f"{idx}. {data['name']} - {data['score']}/{data['total']} 🎯\n"
+
+        text = f"🎉 *Quiz Completed!*\nYour score: {score}/{total}\n\n{ranking_text}"
         keyboard = [[InlineKeyboardButton("Restart Quiz", callback_data="restart_quiz")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text(text, reply_markup=reply_markup)
+
+        await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
 
 async def quiz_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle answer selection during a quiz conversation."""
+    """Handle answer selection and provide animated feedback."""
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -187,26 +219,35 @@ async def quiz_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         current_q = context.user_data.get("current_q", 0)
         q = quiz["questions"][current_q]
 
+        # 🌟 Check if the answer is correct
         if selected == q["correct_option"]:
             context.user_data["score"] += 1
-            feedback = "Correct!"
+            feedback = f"✅ Correct! 🎉\n\n🎯 *{q['question']}*\n✅ {q['options'][selected]}"
+            gif_url = "https://media.giphy.com/media/26gN1h5bQPSF7vsoI/giphy.gif"
         else:
             correct_ans = q["options"][q["correct_option"]]
-            feedback = f"Wrong! The correct answer was: {correct_ans}"
+            feedback = f"❌ Wrong! The correct answer was:\n\n✅ {correct_ans}"
+            gif_url = "https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif"
 
-        await query.message.reply_text(feedback)
-        context.user_data["current_q"] = current_q + 1
+        # 🌟 Send animation first
+        await query.message.reply_animation(gif_url)
+
+        # 🌟 Send feedback message
+        await query.message.reply_text(feedback, parse_mode="Markdown")
+
+        # Move to next question
+        context.user_data["current_q"] += 1
         await send_next_quiz_question(query, context)
-        return QUIZ_TAKING
 
     elif data == "restart_quiz":
-        # Reset quiz state for a restart.
+        # Reset quiz state for restart
         context.user_data["current_q"] = 0
         context.user_data["score"] = 0
         await send_next_quiz_question(query, context)
         return QUIZ_TAKING
 
     return QUIZ_TAKING
+
 
 async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the current quiz conversation."""
@@ -225,6 +266,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("myquizzes", my_quizzes))
     application.add_handler(CommandHandler("allquizzes", all_quizzes))
+    application.add_handler(CommandHandler("quit", quit_quiz))
 
     # Handle JSON file uploads.
     application.add_handler(MessageHandler(filters.Document.ALL, upload_document))
