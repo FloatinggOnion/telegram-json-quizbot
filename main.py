@@ -47,22 +47,37 @@ JSON_FILE = os.getenv('')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message and instructions."""
-    text = (
+       text = (
         "Welcome to the Quiz Bot!\n\n"
         "• To create a quiz, simply upload a JSON file containing your questions.\n"
-        "   The JSON must be a list of questions. Each question should follow one of these formats:\n"
-        "      ```json\n"
-        "      Format 1:\n"
-        "        { \"question\": \"<question text>\", \"options\": [option1, option2, option3, option4], \"correct_option\": <0-based index> }\n"
-        "      Format 2 (scripture):\n"
-        "        { \"question\": \"<scripture quote>\", \"options\": [ref1, ref2, ref3, ref4], \"correct_option\": <index> }\n"
-        "      Format 3 (notes):\n"
-        "        { \"question\": \"<bullet point from note>\", \"options\": [ref1, ref2, ref3, ref4], \"correct_option\": <index> }\n\n"
-        "      ```\n"
-        "• Use /myquizzes to see quizzes you’ve created.\n"
-        "• Use /allquizzes to browse all quizzes and take one.\n"
+        "   The JSON must be a list of questions. Each question should follow one of these formats:\n\n"
+        "```json\n"
+        "[\n"
+        "  {\n"
+        '    "question": "What is the capital of France?",\n'
+        '    "options": ["London", "Paris", "Berlin", "Rome"],\n'
+        '    "correct_option": 1\n'
+        "  },\n"
+        "  {\n"
+        '    "question": "John 3:16",\n'
+        '    "options": ["Matthew 5:14", "John 3:16", "Luke 1:2", "Acts 2:38"],\n'
+        '    "correct_option": 1\n'
+        "  },\n"
+        "  {\n"
+        '    "question": "Point from notes on Romans 12",\n'
+        '    "options": ["Romans 12:1", "Romans 12:2", "Romans 12:3", "Romans 12:4"],\n'
+        '    "correct_option": 0\n'
+        "  }\n"
+        "]\n"
+        "```\n\n"
+        "**Explanation of JSON Structure:**\n"
+        "* **`question`**: The question text (or scripture quote/note point).\n"
+        "* **`options`**: An array of possible answers.\n"
+        "* **`correct_option`**: The index (starting from 0) of the correct answer in the `options` array.\n\n"
+        "• Use `/myquizzes` to see quizzes you’ve created.\n"
+        "• Use `/allquizzes` to browse all quizzes and take one.\n"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="MarkdownV2")
 
 async def upload_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle document uploads (expecting JSON files) to create quizzes."""
