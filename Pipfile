@@ -1,0 +1,16 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+python-dotenv = "*"
+fastapi = {extras = ["standard"], version = "*"}
+uvicorn = "*"
+python-multipart = "*"
+requests = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"
