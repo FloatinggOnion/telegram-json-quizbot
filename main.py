@@ -1,20 +1,16 @@
 import os
-import requests
 import json
 import logging
-import threading
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
+    MessageHandler,
     CallbackQueryHandler,
-    ContextTypes,
     ConversationHandler,
+    ContextTypes,
+    filters,
 )
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse
-import uvicorn
 from dotenv import load_dotenv
 
 
@@ -26,9 +22,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global storage for quizzes.
+# Each quiz is stored as:
+#   quiz_id (int) : {"name": <quiz name>, "creator_id": <user id>, "questions": [list of questions]}
+# A question is expected to be a dict with keys: "question", "options", "correct_option"
+quizzes = {}
+next_quiz_id = 1  # Auto-increment quiz id
 
-# State for our conversation handler
-QUIZ = 1
+# Conversation state for taking a quiz
+QUIZ_TAKING = 1
 
 API_TOKEN = os.getenv('BOT_API_KEY')
 TELEGRAM_API_URL = f'https://api.telegram.org/bot{API_TOKEN}'
@@ -36,100 +38,119 @@ CHAT_ID = int(os.getenv('CHAT_ID'))
 JSON_FILE = os.getenv('')
 
 
-app = FastAPI()
+# ---------------------------
+# Bot Command Handlers
+# ---------------------------
 
-
-# Global variable for quiz questions
-# Initially empty; a default question will be used if no file is uploaded.
-QUIZ_QUESTIONS = []
-
-@app.post("/upload-quiz/")
-async def upload_quiz(file: UploadFile = File(...)):
-    """
-    Endpoint to upload a JSON file containing quiz questions.
-    The JSON should be a list of questions in the following format:
-    
-      Format 1:
-        {
-            "question": <question text>,
-            "options": [option_1, option_2, option_3, option_4],
-            "correct_option": <index_of_correct_option (0-based)>
-        }
-        
-      (Also acceptable are scripture or note formats as needed.)
-    """
-    file_contents = await file.read()
-    try:
-        data = json.loads(file_contents)
-        if not isinstance(data, list):
-            return JSONResponse(status_code=400, content={"error": "JSON must be a list of questions."})
-        # Update the global quiz questions
-        global QUIZ_QUESTIONS
-        QUIZ_QUESTIONS = data
-        return {"status": "Quiz updated successfully", "num_questions": len(QUIZ_QUESTIONS)}
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"error": "Invalid JSON file provided", "details": str(e)})
-
-# -------------------------
-# Telegram Bot Setup
-# -------------------------
-# Enable logging for the bot
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# Define conversation state
-QUIZ = 1
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    /start command handler sends a welcome message with a "Start Quiz" button.
-    """
-    welcome_text = (
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a welcome message and instructions."""
+    text = (
         "Welcome to the Quiz Bot!\n\n"
-        "Test your knowledge with our quiz. "
-        "Press the button below to start."
+        "• To create a quiz, simply upload a JSON file containing your questions.\n"
+        "   The JSON must be a list of questions. Each question should follow one of these formats:\n"
+        "      Format 1:\n"
+        "        { \"question\": \"<question text>\", \"options\": [option1, option2, option3, option4], \"correct_option\": <0-based index> }\n"
+        "      Format 2 (scripture):\n"
+        "        { \"question\": \"<scripture quote>\", \"options\": [ref1, ref2, ref3, ref4], \"correct_option\": <index> }\n"
+        "      Format 3 (notes):\n"
+        "        { \"question\": \"<bullet point from note>\", \"options\": [ref1, ref2, ref3, ref4], \"correct_option\": <index> }\n\n"
+        "• Use /myquizzes to see quizzes you’ve created.\n"
+        "• Use /allquizzes to browse all quizzes and take one.\n"
     )
-    keyboard = [[InlineKeyboardButton("Start Quiz", callback_data="start_quiz")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.message:
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
-    else:
-        await update.callback_query.message.reply_text(welcome_text, reply_markup=reply_markup)
-    return QUIZ
+    await update.message.reply_text(text)
 
-async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def upload_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle document uploads (expecting JSON files) to create quizzes."""
+    document = update.message.document
+    if document.file_name.endswith(".json"):
+        file = await document.get_file()
+        file_bytes = await file.download_as_bytearray()
+        try:
+            data = json.loads(file_bytes.decode("utf-8"))
+            if not isinstance(data, list):
+                await update.message.reply_text("The JSON must be a list of questions.")
+                return
+
+            # Use the file name (without extension) as the quiz name.
+            quiz_name = document.file_name.rsplit(".", 1)[0]
+            global next_quiz_id
+            quiz_id = next_quiz_id
+            next_quiz_id += 1
+
+            # Save quiz details (you can add validation of question structure if desired)
+            quizzes[quiz_id] = {
+                "name": quiz_name,
+                "creator_id": update.effective_user.id,
+                "questions": data
+            }
+            await update.message.reply_text(f"Quiz '{quiz_name}' created successfully with ID {quiz_id}!")
+        except Exception as e:
+            await update.message.reply_text(f"Error parsing JSON: {e}")
+    else:
+        await update.message.reply_text("Please upload a file with a .json extension.")
+
+async def my_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List quizzes created by the current user."""
+    user_id = update.effective_user.id
+    user_quizzes = [f"ID: {quiz_id} - {quiz['name']}" 
+                    for quiz_id, quiz in quizzes.items() if quiz["creator_id"] == user_id]
+    if not user_quizzes:
+        await update.message.reply_text("You haven't created any quizzes yet.")
+    else:
+        text = "Your quizzes:\n" + "\n".join(user_quizzes)
+        await update.message.reply_text(text)
+
+async def all_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all available quizzes with an inline button to take each quiz."""
+    if not quizzes:
+        await update.message.reply_text("No quizzes available yet.")
+    else:
+        buttons = []
+        for quiz_id, quiz in quizzes.items():
+            button = InlineKeyboardButton(f"{quiz['name']} (ID: {quiz_id})", callback_data=f"takequiz_{quiz_id}")
+            buttons.append([button])
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.message.reply_text("Available quizzes:", reply_markup=reply_markup)
+
+# ---------------------------
+# Quiz Taking Conversation Handlers
+# ---------------------------
+
+async def start_quiz_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Initializes quiz state and sends the first question.
+    Entry point for taking a quiz.
+    Triggered by the inline button in /allquizzes (callback_data: "takequiz_{quiz_id}")
     """
     query = update.callback_query
     await query.answer()
-    # Initialize user data for the quiz
-    context.user_data["score"] = 0
+    data = query.data  # Expected format: "takequiz_{quiz_id}"
+    try:
+        quiz_id = int(data.split("_")[1])
+    except (IndexError, ValueError):
+        await query.message.reply_text("Invalid quiz ID.")
+        return ConversationHandler.END
+
+    if quiz_id not in quizzes:
+        await query.message.reply_text("Quiz not found.")
+        return ConversationHandler.END
+
+    # Store the selected quiz and initialize quiz state in user_data.
+    context.user_data["current_quiz"] = quizzes[quiz_id]
+    context.user_data["quiz_id"] = quiz_id
     context.user_data["current_q"] = 0
-    await send_next_question(query, context)
-    return QUIZ
+    context.user_data["score"] = 0
 
-async def send_next_question(query, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Sends the next question from QUIZ_QUESTIONS (or a default question if none uploaded).
-    """
+    await send_next_quiz_question(query, context)
+    return QUIZ_TAKING
+
+async def send_next_quiz_question(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the next question from the current quiz or finish if done."""
+    quiz = context.user_data.get("current_quiz")
     current_q = context.user_data.get("current_q", 0)
-    global QUIZ_QUESTIONS
-    # Use uploaded quiz questions if available; otherwise, use a default question.
-    if not QUIZ_QUESTIONS:
-        questions = [{
-            "question": "Default question: What is 2+2?",
-            "options": ["3", "4", "5", "6"],
-            "correct_option": 1
-        }]
-    else:
-        questions = QUIZ_QUESTIONS
 
-    if current_q < len(questions):
-        q = questions[current_q]
-        # Build inline keyboard for answer options
+    if current_q < len(quiz["questions"]):
+        q = quiz["questions"][current_q]
+        # Build an inline keyboard for the options.
         keyboard = [
             [InlineKeyboardButton(option, callback_data=f"answer_{idx}")]
             for idx, option in enumerate(q["options"])
@@ -137,77 +158,82 @@ async def send_next_question(query, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text(q["question"], reply_markup=reply_markup)
     else:
-        # Quiz finished; show the score and offer restart
+        # Quiz finished; show final score and offer to restart.
         score = context.user_data.get("score", 0)
-        total = len(questions)
-        text = f"Quiz Completed!\nYour score: {score}/{total}\nWould you like to start again?"
-        keyboard = [[InlineKeyboardButton("Restart Quiz", callback_data="restart")]]
+        total = len(quiz["questions"])
+        text = f"Quiz Completed!\nYour score: {score}/{total}\nWould you like to restart the quiz?"
+        keyboard = [[InlineKeyboardButton("Restart Quiz", callback_data="restart_quiz")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text(text, reply_markup=reply_markup)
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Processes answer selection and handles the restart option.
-    """
+async def quiz_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle answer selection during a quiz conversation."""
     query = update.callback_query
     await query.answer()
     data = query.data
-    global QUIZ_QUESTIONS
-    if not QUIZ_QUESTIONS:
-        questions = [{
-            "question": "Default question: What is 2+2?",
-            "options": ["3", "4", "5", "6"],
-            "correct_option": 1
-        }]
-    else:
-        questions = QUIZ_QUESTIONS
 
     if data.startswith("answer_"):
         selected = int(data.split("_")[1])
+        quiz = context.user_data.get("current_quiz")
         current_q = context.user_data.get("current_q", 0)
-        q = questions[current_q]
+        q = quiz["questions"][current_q]
+
         if selected == q["correct_option"]:
             context.user_data["score"] += 1
             feedback = "Correct!"
         else:
-            correct_answer = q["options"][q["correct_option"]]
-            feedback = f"Wrong! The correct answer was: {correct_answer}"
+            correct_ans = q["options"][q["correct_option"]]
+            feedback = f"Wrong! The correct answer was: {correct_ans}"
+
         await query.message.reply_text(feedback)
         context.user_data["current_q"] = current_q + 1
-        await send_next_question(query, context)
-    elif data == "restart":
-        # Reset and restart quiz
-        context.user_data["score"] = 0
-        context.user_data["current_q"] = 0
-        await send_next_question(query, context)
-    return QUIZ
+        await send_next_quiz_question(query, context)
+        return QUIZ_TAKING
 
-def run_telegram_bot():
-    """
-    Initializes and runs the Telegram bot.
-    """
-    BOT_TOKEN = "YOUR_BOT_TOKEN"
-    application = Application.builder().token(BOT_TOKEN).build()
+    elif data == "restart_quiz":
+        # Reset quiz state for a restart.
+        context.user_data["current_q"] = 0
+        context.user_data["score"] = 0
+        await send_next_quiz_question(query, context)
+        return QUIZ_TAKING
+
+    return QUIZ_TAKING
+
+async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel the current quiz conversation."""
+    if update.message:
+        await update.message.reply_text("Quiz cancelled.")
+    return ConversationHandler.END
+
+# ---------------------------
+# Main Function
+# ---------------------------
+def main() -> None:
+    """Start the bot."""  # Replace with your bot's token
+    application = Application.builder().token(API_TOKEN).build()
+
+    # Register command handlers.
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("myquizzes", my_quizzes))
+    application.add_handler(CommandHandler("allquizzes", all_quizzes))
+
+    # Handle JSON file uploads.
+    application.add_handler(MessageHandler(filters.Document.ALL, upload_document))
+
+    # Conversation handler for taking quizzes.
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[CallbackQueryHandler(start_quiz_conversation, pattern=r"^takequiz_\d+$")],
         states={
-            QUIZ: [
-                CallbackQueryHandler(start_quiz, pattern="^start_quiz$"),
-                CallbackQueryHandler(handle_answer, pattern="^(answer_|restart)")
+            QUIZ_TAKING: [
+                CallbackQueryHandler(quiz_answer_handler, pattern=r"^(answer_\d+|restart_quiz)$")
             ]
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CommandHandler("cancel", cancel_quiz)],
     )
     application.add_handler(conv_handler)
+
+    # Run the bot.
     application.run_polling()
 
-# -------------------------
-# Running Both FastAPI and Telegram Bot
-# -------------------------
 if __name__ == "__main__":
-    # Run Telegram bot in a separate thread
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
-    
-    # Run FastAPI using Uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    main()
