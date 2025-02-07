@@ -47,7 +47,7 @@ JSON_FILE = os.getenv('')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message and instructions."""
-       text = (
+    text = (
         "Welcome to the Quiz Bot!\n\n"
         "• To create a quiz, simply upload a JSON file containing your questions.\n"
         "   The JSON must be a list of questions. Each question should follow one of these formats:\n\n"
