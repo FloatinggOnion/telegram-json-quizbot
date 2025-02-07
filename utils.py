@@ -180,15 +180,11 @@ async def send_next_quiz_question(query, context: ContextTypes.DEFAULT_TYPE) -> 
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text(q["question"], reply_markup=reply_markup)
 
-        # Start question timer
-        await asyncio.sleep(QUESTION_TIMEOUT)
-        if context.user_data.get("current_q") == current_q:  # Check if user answered
-            context.user_data["current_q"] += 1  # Move to next question
-            await query.message.reply_text("⏳ Time's up! Moving to the next question.")
-            await send_next_quiz_question(query, context)
-
+        # Remove the timer for now as it's causing issues with webhooks
+        # We can implement a different timeout mechanism if needed
+        
     else:
-        # 🎯 Quiz finished: Update leaderboard
+        # Quiz finished: Update leaderboard
         user_id = query.from_user.id
         user_name = query.from_user.first_name
         score = context.user_data.get("score", 0)
@@ -196,7 +192,7 @@ async def send_next_quiz_question(query, context: ContextTypes.DEFAULT_TYPE) -> 
 
         leaderboard[user_id] = {"name": user_name, "score": score, "total": total}
 
-        # 🏆 Generate leaderboard ranking
+        # Generate leaderboard ranking
         sorted_leaderboard = sorted(
             leaderboard.items(), key=lambda x: x[1]["score"], reverse=True
         )
@@ -214,41 +210,41 @@ async def send_next_quiz_question(query, context: ContextTypes.DEFAULT_TYPE) -> 
 async def quiz_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle answer selection and provide animated feedback."""
     query = update.callback_query
-    await query.answer()
-    data = query.data
+    try:
+        await query.answer()  # Important: Acknowledge the button press first
+        data = query.data
 
-    if data.startswith("answer_"):
-        selected = int(data.split("_")[1])
-        quiz = context.user_data.get("current_quiz")
-        current_q = context.user_data.get("current_q", 0)
-        q = quiz["questions"][current_q]
+        if data.startswith("answer_"):
+            selected = int(data.split("_")[1])
+            quiz = context.user_data.get("current_quiz")
+            current_q = context.user_data.get("current_q", 0)
+            q = quiz["questions"][current_q]
 
-        # 🌟 Check if the answer is correct
-        if selected == q["correct_option"]:
-            context.user_data["score"] += 1
-            feedback = f"✅ Correct! 🎉\n\n🎯 *{q['question']}*\n✅ {q['options'][selected]}"
-            gif_url = "https://media.giphy.com/media/26gN1h5bQPSF7vsoI/giphy.gif"
-        else:
-            correct_ans = q["options"][q["correct_option"]]
-            feedback = f"❌ Wrong! The correct answer was:\n\n✅ {correct_ans}"
-            gif_url = "https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif"
+            # Check if the answer is correct
+            if selected == q["correct_option"]:
+                context.user_data["score"] = context.user_data.get("score", 0) + 1
+                feedback = f"✅ Correct! 🎉\n\n🎯 *{q['question']}*\n✅ {q['options'][selected]}"
+            else:
+                correct_ans = q["options"][q["correct_option"]]
+                feedback = f"❌ Wrong! The correct answer was:\n\n✅ {correct_ans}"
 
-        # 🌟 Send animation first
-        await query.message.reply_animation(gif_url)
+            # Send feedback message
+            await query.message.reply_text(feedback, parse_mode="Markdown")
 
-        # 🌟 Send feedback message
-        await query.message.reply_text(feedback, parse_mode="Markdown")
+            # Move to next question
+            context.user_data["current_q"] += 1
+            await send_next_quiz_question(query, context)
 
-        # Move to next question
-        context.user_data["current_q"] += 1
-        await send_next_quiz_question(query, context)
+        elif data == "restart_quiz":
+            # Reset quiz state for restart
+            context.user_data["current_q"] = 0
+            context.user_data["score"] = 0
+            await send_next_quiz_question(query, context)
 
-    elif data == "restart_quiz":
-        # Reset quiz state for restart
-        context.user_data["current_q"] = 0
-        context.user_data["score"] = 0
-        await send_next_quiz_question(query, context)
-        return QUIZ_TAKING
+    except Exception as e:
+        logger.error(f"Error in quiz_answer_handler: {e}")
+        await query.message.reply_text("Sorry, there was an error processing your answer. Please try again.")
+        return ConversationHandler.END
 
     return QUIZ_TAKING
 
