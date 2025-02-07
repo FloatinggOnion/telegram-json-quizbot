@@ -1,22 +1,21 @@
 import os
 import json
 import logging
+import sqlite3
+import random
 from contextlib import asynccontextmanager
-
-import asyncio
 from fastapi import FastAPI, Request
 import uvicorn
 from telegram import Update
 from telegram.ext import Application
 from dotenv import load_dotenv
-
 from utils import (
-    start, upload_document, my_quizzes, all_quizzes, 
-    start_quiz_conversation, quiz_answer_handler, 
-    cancel_quiz, quit_quiz, setup_handlers, QUIZ_TAKING
+    start, upload_document, my_quizzes, all_quizzes,
+    start_quiz_conversation, quiz_answer_handler, cancel_quiz,
+    quit_quiz, setup_handlers, QUIZ_TAKING
 )
 
-# Load environment variables first
+# Load environment variables
 load_dotenv()
 
 # Enable logging
@@ -30,30 +29,72 @@ logger = logging.getLogger(__name__)
 API_TOKEN = os.getenv('BOT_API_KEY')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 PORT = int(os.getenv('PORT', 8000))
+DB_FILE = "quizzes.db"
 
 # Initialize bot application
 application = Application.builder().token(API_TOKEN).build()
 
+# Database setup
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS quizzes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            creator_id INTEGER NOT NULL,
+            questions TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def save_quiz(name, creator_id, questions):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO quizzes (name, creator_id, questions) VALUES (?, ?, ?)",
+        (name, creator_id, json.dumps(questions))
+    )
+    conn.commit()
+    conn.close()
+
+def get_all_quizzes():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM quizzes")
+    quizzes = cursor.fetchall()
+    conn.close()
+    return quizzes
+
+def get_quiz_by_id(quiz_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT questions FROM quizzes WHERE id = ?", (quiz_id,))
+    quiz = cursor.fetchone()
+    conn.close()
+    if quiz:
+        questions = json.loads(quiz[0])
+        random.shuffle(questions)
+        return questions
+    return None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan manager for FastAPI application"""
     try:
-        # Startup: Set up webhook and initialize application
-        await setup_handlers(application)  # Pass the application instance
+        init_db()
+        await setup_handlers(application)
         webhook_info = await application.bot.get_webhook_info()
         if webhook_info.url != WEBHOOK_URL:
             await application.bot.set_webhook(url=f"{WEBHOOK_URL}/{API_TOKEN}")
         await application.initialize()
         await application.start()
         logger.info("Bot started with webhook")
-        
         yield
-        
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
     finally:
-        # Shutdown: Clean up
         await application.stop()
         await application.shutdown()
         logger.info("Bot stopped")
@@ -63,7 +104,6 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post(f"/{API_TOKEN}")
 async def webhook_handler(request: Request):
-    """Handle incoming webhook updates from Telegram."""
     try:
         data = await request.json()
         update = Update.de_json(data, application.bot)
@@ -75,7 +115,6 @@ async def webhook_handler(request: Request):
 
 @app.get("/")
 async def health_check():
-    """Simple health check endpoint."""
     return {"status": "ok"}
 
 if __name__ == "__main__":
