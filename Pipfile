@@ -9,6 +9,7 @@ fastapi = {extras = ["standard"], version = "*"}
 uvicorn = "*"
 python-multipart = "*"
 requests = "*"
+python-telegram-bot = "*"
 
 [dev-packages]
 
