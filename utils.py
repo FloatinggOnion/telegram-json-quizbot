@@ -1,6 +1,6 @@
 import json
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -60,7 +60,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• Use `/myquizzes` to see quizzes you’ve created.\n"
         "• Use `/allquizzes` to browse all quizzes and take one.\n"
     )
-    await update.message.reply_text(text, parse_mode="MarkdownV2")
+    await update.message.reply_text(text, parse_mode=constants.ParseMode.MARKDOWN_V2)
 
 async def upload_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle document uploads (expecting JSON files) to create quizzes."""
