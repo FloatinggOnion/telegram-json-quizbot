@@ -48,12 +48,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Welcome to the Quiz Bot!\n\n"
         "• To create a quiz, simply upload a JSON file containing your questions.\n"
         "   The JSON must be a list of questions. Each question should follow one of these formats:\n"
+        "      ```json\n"
         "      Format 1:\n"
         "        { \"question\": \"<question text>\", \"options\": [option1, option2, option3, option4], \"correct_option\": <0-based index> }\n"
         "      Format 2 (scripture):\n"
         "        { \"question\": \"<scripture quote>\", \"options\": [ref1, ref2, ref3, ref4], \"correct_option\": <index> }\n"
         "      Format 3 (notes):\n"
         "        { \"question\": \"<bullet point from note>\", \"options\": [ref1, ref2, ref3, ref4], \"correct_option\": <index> }\n\n"
+        "      ```\n"
         "• Use /myquizzes to see quizzes you’ve created.\n"
         "• Use /allquizzes to browse all quizzes and take one.\n"
     )
@@ -83,7 +85,14 @@ async def upload_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "creator_id": update.effective_user.id,
                 "questions": data
             }
-            await update.message.reply_text(f"Quiz '{quiz_name}' created successfully with ID {quiz_id}!")
+            # Send success message with inline button
+            keyboard = [[InlineKeyboardButton("Start Quiz", callback_data=f"takequiz_{quiz_id}")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"Quiz '{quiz_name}' created successfully!\nPress the button below to start.",
+                reply_markup=reply_markup
+            )
         except Exception as e:
             await update.message.reply_text(f"Error parsing JSON: {e}")
     else:
