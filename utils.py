@@ -1,6 +1,6 @@
 import json
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -12,55 +12,67 @@ from telegram.ext import (
 )
 import asyncio
 
+logger = logging.getLogger(__name__)
 
-
-# Global storage for quizzes.
-# Each quiz is stored as:
-#   quiz_id (int) : {"name": <quiz name>, "creator_id": <user id>, "questions": [list of questions]}
-# A question is expected to be a dict with keys: "question", "options", "correct_option"
+# Global storage
 quizzes = {}
-leaderboard = {}  # Stores user scores {user_id: {"name": "John", "score": 5, "total": 10}}
-next_quiz_id = 1  # Auto-increment quiz id
+leaderboard = {}
+next_quiz_id = 1
 
-# Conversation state for taking a quiz
+# Constants
 QUIZ_TAKING = 1
-QUESTION_TIMEOUT = 20  # Time limit for answering a question (in seconds)
+QUESTION_TIMEOUT = 20
 
+async def setup_handlers(application: Application):
+    """Set up all handlers for the bot."""
+    try:
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("myquizzes", my_quizzes))
+        application.add_handler(CommandHandler("allquizzes", all_quizzes))
+        application.add_handler(CommandHandler("quit", quit_quiz))
+        application.add_handler(MessageHandler(filters.Document.ALL, upload_document))
 
+        conv_handler = ConversationHandler(
+            entry_points=[CallbackQueryHandler(start_quiz_conversation, pattern=r"^takequiz_\d+$")],
+            states={
+                QUIZ_TAKING: [
+                    CallbackQueryHandler(quiz_answer_handler, pattern=r"^(answer_\d+|restart_quiz)$"),
+                    CommandHandler("quit", quit_quiz),
+                ]
+            },
+            fallbacks=[CommandHandler("cancel", cancel_quiz), CommandHandler("quit", quit_quiz)],
+        )
+        application.add_handler(conv_handler)
+        logger.info("All handlers have been set up successfully")
+    except Exception as e:
+        logger.error(f"Error setting up handlers: {e}")
+        raise
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message and instructions."""
-    text = (
-        "Welcome to the Quiz Bot\!\n\n"
-        "• To create a quiz, simply upload a JSON file containing your questions.\n"
-        "   The JSON must be a list of questions. Each question should follow one of these formats:\n\n"
-        "```json\n"
-        "[\n"
-        "  {\n"
-        '    "question": "What is the capital of France?",\n'
-        '    "options": ["London", "Paris", "Berlin", "Rome"],\n'
-        '    "correct_option": 1\n'
-        "  },\n"
-        "  {\n"
-        '    "question": "John 3:16",\n'
-        '    "options": ["Matthew 5:14", "John 3:16", "Luke 1:2", "Acts 2:38"],\n'
-        '    "correct_option": 1\n'
-        "  },\n"
-        "  {\n"
-        '    "question": "Point from notes on Romans 12",\n'
-        '    "options": ["Romans 12:1", "Romans 12:2", "Romans 12:3", "Romans 12:4"],\n'
-        '    "correct_option": 0\n'
-        "  }\n"
-        "]\n"
-        "```\n\n"
-        "**Explanation of JSON Structure:**\n"
-        "* **`question`**: The question text (or scripture quote/note point).\n"
-        "* **`options`**: An array of possible answers.\n"
-        "* **`correct_option`**: The index (starting from 0) of the correct answer in the `options` array.\n\n"
-        "• Use `/myquizzes` to see quizzes you’ve created.\n"
-        "• Use `/allquizzes` to browse all quizzes and take one.\n"
-    )
-    await update.message.reply_text(text, parse_mode=constants.ParseMode.MARKDOWN_V2)
+    try:
+        text = (
+            "Welcome to the Quiz Bot! 🎯\n\n"
+            "To create a quiz, upload a JSON file with your questions. Format:\n\n"
+            "```\n"
+            "[\n"
+            "  {\n"
+            '    "question": "What is 2+2?",\n'
+            '    "options": ["3", "4", "5", "6"],\n'
+            '    "correct_option": 1\n'
+            "  }\n"
+            "]\n"
+            "```\n\n"
+            "Commands:\n"
+            "• /myquizzes - See your quizzes\n"
+            "• /allquizzes - Browse all quizzes\n"
+            "• /quit - Exit current quiz"
+        )
+        await update.message.reply_text(text, parse_mode='Markdown')
+        logger.info(f"Start command executed for user {update.effective_user.id}")
+    except Exception as e:
+        logger.error(f"Error in start command: {e}")
+        await update.message.reply_text("Welcome! Use /help to see available commands.")
 
 async def upload_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle document uploads (expecting JSON files) to create quizzes."""
