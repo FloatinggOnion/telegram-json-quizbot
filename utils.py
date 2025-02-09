@@ -52,7 +52,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message and instructions."""
     try:
         text = (
-            "Welcome to the Quiz Bot! 🎯\n\n"
+            "Welcome to the Onion Quiz Bot! 🎯\n\n"
             "To create a quiz, upload a JSON file with your questions. Format:\n\n"
             "```\n"
             "[\n"
@@ -112,15 +112,29 @@ async def upload_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Please upload a file with a .json extension.")
 
 async def my_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List quizzes created by the current user."""
+    """List quizzes created by the current user with inline buttons."""
     user_id = update.effective_user.id
-    user_quizzes = [f"ID: {quiz_id} - {quiz['name']}" 
-                    for quiz_id, quiz in quizzes.items() if quiz["creator_id"] == user_id]
+    user_quizzes = [
+        (quiz_id, quiz)
+        for quiz_id, quiz in quizzes.items()
+        if quiz["creator_id"] == user_id
+    ]
+
     if not user_quizzes:
         await update.message.reply_text("You haven't created any quizzes yet.")
-    else:
-        text = "Your quizzes:\n" + "\n".join(user_quizzes)
-        await update.message.reply_text(text)
+        return
+
+    buttons = []
+    for quiz_id, quiz in user_quizzes:
+        num_questions = len(quiz["questions"])
+        button = InlineKeyboardButton(
+            f"{quiz['name']} (ID: {quiz_id}, {num_questions} questions)",
+            callback_data=f"takequiz_{quiz_id}",
+        )
+        buttons.append([button])
+
+    reply_markup = InlineKeyboardMarkup(buttons)
+    await update.message.reply_text("Your quizzes:", reply_markup=reply_markup)
 
 async def all_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all available quizzes with an inline button to take each quiz."""
@@ -129,7 +143,8 @@ async def all_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     else:
         buttons = []
         for quiz_id, quiz in quizzes.items():
-            button = InlineKeyboardButton(f"{quiz['name']} (ID: {quiz_id})", callback_data=f"takequiz_{quiz_id}")
+            num_questions = len(quiz["questions"])
+            button = InlineKeyboardButton(f"{quiz['name']} (ID: {quiz_id}, {num_questions} questions)", callback_data=f"takequiz_{quiz_id}")
             buttons.append([button])
         reply_markup = InlineKeyboardMarkup(buttons)
         await update.message.reply_text("Available quizzes:", reply_markup=reply_markup)
